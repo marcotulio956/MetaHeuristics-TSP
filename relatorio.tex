@@ -1,0 +1,227 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{fancyvrb}
+\usepackage{amsmath}
+\usepackage{authblk}
+\usepackage{indentfirst}
+
+\geometry{margin=2.5cm}
+
+\title{Heurísticas de Construção e Metaheurísticas para o Problema do Caixeiro Viajante}
+\author[1]{Marco Túlio Siqueira da Mata}
+\affil[1]{PPGCC UFMG}
+\date{11 de Setembro de 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Este trabalho implementa uma heurística construtiva e uma metaheurística para instâncias simétricas do Problema do Caixeiro Viajante (TSP). A heurística construtiva é o Vizinho Mais Próximo, seguida de uma busca local determinística baseada em \textit{2-opt}. A metaheurística é Simulated Annealing, também com vizinhança \textit{2-opt}. Foram tratados os formatos de distância \texttt{EUC\_2D} e \texttt{ATT} definidos no TSPLIB 95.
+\end{abstract}
+
+\section{Introdução}
+O TSP consiste em encontrar um ciclo de custo mínimo que visite cada cidade exatamente uma vez e retorne à cidade inicial. O problema é NP-difícil; por isso, para as instâncias fornecidas, são utilizadas heurísticas que produzem soluções válidas em tempo computacional reduzido, sem garantir optimalidade.
+
+As instâncias utilizadas são \texttt{att48.tsp} e os arquivos do diretório \texttt{EUC\_2D}. O programa processa todas as instâncias automaticamente e registra os resultados em \texttt{results.csv}. Os valores de referência utilizados na comparação foram armazenados em \texttt{TSP-BEST.txt}. Uma ferramenta de inteligência artificial foi utilizada como apoio na implementação inicial do parser, posteriormente compilado, testado e validado conforme as especificações do TSPLIB 95. Para mais informações dos dados, consulte \url{http://comopt.ifi.uni-heidelberg.de/software/TSPLIB95/}.
+
+\section{Leitura das instâncias e distâncias}
+O parser lê os campos \texttt{NAME}, \texttt{DIMENSION}, \texttt{EDGE\_WEIGHT\_TYPE} e a seção de coordenadas dos nós. A matriz de distâncias é simétrica e é construída uma única vez para cada instância.
+
+Para o tipo \texttt{EUC\_2D}, a distância entre as cidades $i$ e $j$ é
+\[
+ d_{ij}=\operatorname{round}\left(\sqrt{(x_i-x_j)^2+(y_i-y_j)^2}\right).
+\]
+
+Para o tipo \texttt{ATT}, calcula-se
+\[
+ r_{ij}=\sqrt{\frac{(x_i-x_j)^2+(y_i-y_j)^2}{10}},
+ \qquad t_{ij}=\operatorname{round}(r_{ij}),
+\]
+e então
+\[
+ d_{ij}=\begin{cases}
+ t_{ij}+1, & t_{ij}<r_{ij},\\
+ t_{ij}, & \text{caso contrário.}
+ \end{cases}
+\]
+Essa implementação segue as fórmulas fornecidas no enunciado e no manual TSPLIB 95.
+
+\section{Heurística construtiva}
+A rota inicial é construída pelo Vizinho Mais Próximo. A cidade zero é escolhida como origem. Em cada passo, entre as cidades ainda não visitadas, seleciona-se a cidade de menor distância à cidade atual. Empates são resolvidos pelo menor índice, tornando a construção determinística. Como refinamento da solução construtiva, aplica-se em seguida uma busca local determinística baseada em \textit{2-opt}; portanto, a coluna construtiva do CSV representa a rota do Vizinho Mais Próximo após esse refinamento.
+
+O pseudocódigo da construção é:
+
+\begin{Verbatim}[fontsize=\small]
+VIZINHO_MAIS_PROXIMO(instancia, inicio):
+	rota <- [inicio]
+	visitado[inicio] <- verdadeiro
+
+	enquanto tamanho(rota) < numero_de_cidades:
+		atual <- ultimo_elemento(rota)
+		candidato <- cidade nao visitada mais proxima de atual
+		em empate, escolher a cidade de menor indice
+		adicionar candidato a rota
+		visitado[candidato] <- verdadeiro
+
+	retornar rota
+\end{Verbatim}
+
+Depois da construção, é aplicada uma busca local \textit{2-opt}. Um movimento remove as arestas $(a,b)$ e $(c,d)$ e reconecta a rota como $(a,c)$ e $(b,d)$, invertendo o segmento intermediário. O primeiro movimento que reduz o custo é aplicado, e o processo continua até não existir melhoria.
+
+O custo de um movimento é calculado de forma incremental, sem recalcular toda a rota:
+
+\[
+ \Delta = d(a,c)+d(b,d)-d(a,b)-d(c,d).
+\]
+
+\begin{Verbatim}[fontsize=\small]
+MELHORAR_2OPT(rota):
+	melhorou <- verdadeiro
+	enquanto melhorou:
+		melhorou <- falso
+		para i de 1 ate n-2:
+			para j de i+1 ate n-1:
+				delta <- custo_das_duas_arestas_novas
+						 - custo_das_duas_arestas_removidas
+				se delta < 0:
+					inverter o segmento rota[i..j]
+					melhorou <- verdadeiro
+					interromper os dois lacos
+	retornar rota
+\end{Verbatim}
+
+\section{Simulated Annealing}
+O Simulated Annealing começa com a solução produzida pelo Vizinho Mais Próximo e refinada por \textit{2-opt}. Em cada iteração, duas posições internas da rota são sorteadas e o segmento entre elas é invertido.
+
+Se $\Delta$ é a variação de custo, uma solução pior é aceita com probabilidade
+\[
+ P(\text{aceitar})=\exp\left(-\frac{\Delta}{T}\right), \qquad \Delta>0,
+\]
+onde $T$ é a temperatura corrente. Soluções melhores são sempre aceitas. A temperatura é reduzida multiplicando-a por $0{,}995$ após cada iteração. A temperatura inicial padrão é $10\%$ do custo da solução inicial, com piso de 100. O número de iterações é $2500n$, em que $n$ é a dimensão da instância.
+
+O programa executa 20 sementes por instância. As sementes são registradas no CSV para permitir a reprodução dos resultados. A melhor solução encontrada durante toda a execução é preservada.
+
+\begin{Verbatim}[fontsize=\small]
+SIMULATED_ANNEALING(instancia, semente):
+	atual <- MELHORAR_2OPT(VIZINHO_MAIS_PROXIMO(instancia, 0))
+	melhor <- atual
+	T <- max(100, 0.10 * custo(atual))
+
+	para iteracao de 1 ate 2500 * n:
+		sortear duas posicoes internas i e j
+		delta <- custo do movimento 2-opt
+
+		se delta <= 0 ou sorteio_uniforme(0,1) < exp(-delta/T):
+			aplicar movimento 2-opt
+			atualizar custo da solucao atual
+			se custo atual < custo melhor:
+				melhor <- atual
+
+		T <- 0.995 * T
+		se T ficar numericamente muito pequeno:
+			reiniciar T em 0.001 * temperatura inicial
+
+	retornar melhor
+\end{Verbatim}
+
+O algoritmo mantém a cidade inicial na primeira posição: as posições sorteadas pertencem ao intervalo interno da rota. Como as instâncias são simétricas, a inversão de segmento produz outra rota válida e o delta acima é suficiente para atualizar o custo.
+
+\section{Implementação}
+O código está no arquivo \texttt{tsp\_heuristics.cpp} e pode ser compilado com:
+
+\begin{Verbatim}
+g++ -std=c++17 -O2 -Wall -Wextra -pedantic tsp_heuristics.cpp -o tsp_heuristics
+\end{Verbatim}
+
+Os testes internos do parser e execução todas dos resultados de instâncias podem ser feitos com:
+
+\begin{Verbatim}
+./tsp_heuristics --test
+./tsp_heuristics results.csv <n>
+\end{Verbatim}
+
+O programa valida a dimensão, a unicidade das cidades na rota e o tipo de distância. O custo da rota inclui a aresta de retorno da última cidade para a primeira.
+
+\section{Resultados}
+Foram processadas as 21 instâncias existentes no conjunto fornecido: uma instância \texttt{ATT} e 20 instâncias \texttt{EUC\_2D}. Para cada instância foram executadas 20 sementes, totalizando 420 execuções. Os valores ótimos foram lidos de \texttt{TSP-BEST.txt}. A tabela apresenta as médias e os melhores custos observados em cada algoritmo. As colunas ``Gap const.'' e ``Gap SA'' medem a distância relativa entre as médias dos métodos e o ótimo de cada instância, segundo $100(\bar{C}-C^*)/C^*$.
+
+\begingroup
+\tiny
+\setlength{\tabcolsep}{2pt}
+\begin{longtable}{@{}lrrrrrrrrrrr@{}}
+\caption{Resumo dos resultados por instância.}\\
+\toprule
+Inst. & Tipo & $n$ & Ótimo & Média C & Melhor C & Média SA & Melhor SA & Melh./20 & Gap C & Gap SA \\
+\midrule
+\endfirsthead
+\toprule
+Inst. & Tipo & $n$ & Ótimo & Média C & Melhor C & Média SA & Melhor SA & Melh./20 & Gap C & Gap SA \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\texttt{att48} & ATT & 48 & 10628 & 10782,00 & 10782 & 10782,00 & 10782 & 0 & 1,45\% & 1,45\% \\
+\texttt{berlin52} & EUC & 52 & 7542 & 7967,00 & 7967 & 7940,10 & 7542 & 2 & 5,64\% & 5,28\% \\
+\texttt{kroA100} & EUC & 100 & 21282 & 22437,00 & 22437 & 22423,80 & 22181 & 2 & 5,43\% & 5,37\% \\
+\texttt{kroA150} & EUC & 150 & 26524 & 28516,00 & 28516 & 28464,00 & 27661 & 3 & 7,51\% & 7,31\% \\
+\texttt{kroA200} & EUC & 200 & 29368 & 30028,00 & 30028 & 30028,00 & 30028 & 0 & 2,25\% & 2,25\% \\
+\texttt{kroB100} & EUC & 100 & 22141 & 22663,00 & 22663 & 22663,00 & 22663 & 0 & 2,36\% & 2,36\% \\
+\texttt{kroB150} & EUC & 150 & 26130 & 26698,00 & 26698 & 26698,00 & 26698 & 0 & 2,17\% & 2,17\% \\
+\texttt{kroB200} & EUC & 200 & 29437 & 32489,00 & 32489 & 32339,20 & 31631 & 9 & 10,37\% & 9,86\% \\
+\texttt{kroC100} & EUC & 100 & 20749 & 22129,00 & 22129 & 22067,50 & 21357 & 4 & 6,65\% & 6,35\% \\
+\texttt{kroD100} & EUC & 100 & 21294 & 22775,00 & 22775 & 22694,85 & 22283 & 5 & 6,96\% & 6,58\% \\
+\texttt{kroE100} & EUC & 100 & 22068 & 23290,00 & 23290 & 23276,60 & 23022 & 1 & 5,54\% & 5,48\% \\
+\texttt{lin105} & EUC & 105 & 14379 & 15601,00 & 15601 & 15485,45 & 14934 & 9 & 8,50\% & 7,69\% \\
+\texttt{pr107} & EUC & 107 & 44303 & 44613,00 & 44613 & 44613,00 & 44613 & 0 & 0,70\% & 0,70\% \\
+\texttt{pr124} & EUC & 124 & 59030 & 60304,00 & 60304 & 60255,70 & 59679 & 2 & 2,16\% & 2,08\% \\
+\texttt{pr136} & EUC & 136 & 96772 & 103806,00 & 103806 & 103785,80 & 103442 & 2 & 7,27\% & 7,25\% \\
+\texttt{pr144} & EUC & 144 & 58537 & 61244,00 & 61244 & 60930,10 & 59089 & 7 & 4,62\% & 4,09\% \\
+\texttt{pr152} & EUC & 152 & 73682 & 75792,00 & 75792 & 75735,45 & 75126 & 2 & 2,86\% & 2,79\% \\
+\texttt{pr76} & EUC & 76 & 108159 & 110714,00 & 110714 & 110714,00 & 110714 & 0 & 2,36\% & 2,36\% \\
+\texttt{rat195} & EUC & 195 & 2323 & 2427,00 & 2427 & 2427,00 & 2427 & 0 & 4,48\% & 4,48\% \\
+\texttt{rat99} & EUC & 99 & 1211 & 1268,00 & 1268 & 1268,00 & 1268 & 0 & 4,71\% & 4,71\% \\
+\texttt{st70} & EUC & 70 & 675 & 691,00 & 691 & 690,85 & 688 & 1 & 2,37\% & 2,35\% \\
+\end{longtable}
+\endgroup
+
+No conjunto completo, 371 das 420 execuções produziram o mesmo custo nos dois métodos e 49 produziram melhoria. A média dos custos construtivos foi $34582,57$, enquanto a média do Simulated Annealing foi $34537,26$, uma redução média agregada de aproximadamente $0,131\%$. As melhorias ocorreram em 11 instâncias, com maior frequência em \texttt{kroB200} e \texttt{lin105}, ambas com melhoria em 9 das 20 sementes. A maior melhoria individual foi observada em \texttt{kroA150}, de 28516 para 27661, aproximadamente $3,00\%$.
+
+Para avaliar especificamente a qualidade dos caminhos, foram usados os valores ótimos de \texttt{TSP-BEST.txt}. O gap médio por instância foi $4,59\%$ para a construção e $4,43\%$ para a média do Simulated Annealing, uma redução de $0,16$ ponto percentual. O menor gap da construção foi $0,70\%$ em \texttt{pr107}, enquanto o maior foi $10,37\%$ em \texttt{kroB200}. O melhor resultado do SA atingiu o ótimo em \texttt{berlin52}; em \texttt{pr144}, o melhor SA ficou a apenas $0,94\%$ do ótimo, e em \texttt{lin105}, a $3,86\%$. Como a cidade inicial e os critérios de desempate são fixos, a construção é determinística: suas 20 repetições têm exatamente o mesmo custo em cada instância. A variação entre sementes pertence exclusivamente ao Simulated Annealing.
+
+\section{Discussão}
+O Vizinho Mais Próximo possui baixo custo computacional e fornece rapidamente uma solução válida, mas é sensível à cidade inicial e às decisões locais. O \textit{2-opt} corrige cruzamentos e substitui pares de arestas quando a troca reduz o custo.
+
+O Simulated Annealing amplia a exploração ao aceitar ocasionalmente movimentos piores no início da execução. Nos resultados, entretanto, a solução inicial já estava em um ótimo local de \textit{2-opt} em muitas instâncias; por isso, o método encontrou o mesmo custo em 371 execuções. Isso não indica falha de validade, mas mostra que a configuração utilizada foi conservadora e que a vizinhança escolhida não encontrou melhorias adicionais nessas rotas. As 49 melhorias observadas confirmam que a aceitação probabilística permitiu escapar de alguns ótimos locais.
+
+Os tempos também cresceram com a dimensão. Na tabela original do CSV, a construção ficou abaixo de aproximadamente 2 ms por execução e o Simulated Annealing abaixo de aproximadamente 17 ms nas instâncias fornecidas, em um sistema com processador AMD Ryzen 7 9800X3D e RAM 32GB. Essa diferença é esperada, pois a metaheurística avalia $2500n$ iterações, enquanto a construção e o refinamento local são executados uma única vez. O aumento para 20 sementes melhora a confiança descritiva das estatísticas sem alterar a solução construtiva determinística.
+
+Os resultados são soluções heurísticas e não devem ser interpretados como provas de optimalidade. A comparação com \texttt{TSP-BEST.txt} é usada apenas como referência experimental. Em 13 das 21 instâncias o gap médio do SA foi menor que o da construção; nas demais, a configuração adotada não obteve melhora média suficiente. Portanto, o SA foi útil como mecanismo de diversificação, mas seus ganhos foram modestos e dependentes da instância.
+
+\section{Conclusão}
+Duas abordagens computacionais foram exploradas: uma heurística construtiva e uma metaheurística natural. Foram apresentadas soluções para as instâncias TSPLIB 95 fornecidas, com execuções reproduzíveis. A construção apresentou gap médio de $4,59\%$ em relação aos ótimos conhecidos, enquanto o Simulated Annealing apresentou melhoria média pequena, mas mensurável $0,16\%$, ainda mantendo a validade das rotas.
+
+\begin{thebibliography}{9}
+\bibitem{tsplib}
+G. Reinelt. \textit{TSPLIB 95}. Universität Heidelberg, Institut für Angewandte Mathematik.
+
+\bibitem{cormen}
+T. H. Cormen, C. E. Leiserson, R. L. Rivest e C. Stein. \textit{Introduction to Algorithms}. MIT Press, 2009.
+
+\bibitem{talbi}
+E.-G. Talbi. \textit{Metaheuristics: From Design to Implementation}. Wiley, 2009.
+
+\bibitem{aarts}
+E. Aarts e J. K. Lenstra. \textit{Local Search in Combinatorial Optimization}. Wiley, 1997.
+
+\bibitem{sorensen}
+K. S{\o}rensen, M. Sevaux e F. Glover. A History of Metaheuristics. In: \textit{Handbook of Heuristics}. Springer, 2018.
+\end{thebibliography}
+
+\end{document}
